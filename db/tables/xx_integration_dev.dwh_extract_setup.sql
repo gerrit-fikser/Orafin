@@ -15,6 +15,7 @@ BEGIN
 				bi_report varchar2(200),
 				bi_parameters VARCHAR2(4000) CHECK (bi_parameters IS JSON),
             automation_static_id varchar2(100),
+            scheduler_job_name varchar2(100),
 				store_data varchar2(1),
 				store_data_table varchar2(50),
 				file_name varchar2(100),
@@ -93,6 +94,22 @@ BEGIN
 
    IF v_column_exists = 0 THEN
 	EXECUTE IMMEDIATE 'alter table DWH_EXTRACT_SETUP add AUTOMATION_STATIC_ID varchar2(100)';
+   END IF;
+END;
+/
+
+DECLARE
+   v_column_exists NUMBER;
+BEGIN
+   SELECT COUNT(*)
+   INTO v_column_exists
+   FROM all_tab_cols
+   WHERE table_name = 'DWH_EXTRACT_SETUP'
+   AND owner = 'XX_INTEGRATION_DEV'
+   and column_name = 'SCHEDULER_JOB_NAME';
+
+   IF v_column_exists = 0 THEN
+	EXECUTE IMMEDIATE 'alter table DWH_EXTRACT_SETUP add SCHEDULER_JOB_NAME varchar2(100)';
    END IF;
 END;
 /
