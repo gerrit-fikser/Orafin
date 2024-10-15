@@ -102,49 +102,23 @@ END remove_header_row;
 ==== PUBLIC Procedures and Functions =======
 ===========================================*/
 
-/*
---function to check if extract name is valid. Inwoked from WF.
-function get_extract_id (
-    p_msg_id       in dbo_msg_outbound.msg_id%type,
-    p_extract_name in dwh_extract_setup.name%type
-) return number
-is 
-    l_id dwh_extract_setup.id%type;
-begin 
-    g_proc := 'get_extract_id';
-    select id 
-    into l_id
-    from dwh_extract_setup 
-    where name = p_extract_name
-    and enabled = 'Y';
-
-    return l_id;
-exception 
-    when others then 
-        log_error(p_msg_id, SQLERRM);
-        raise;
-end get_extract_id;
-*/
-
---create and store outbound message. start apex automation. invoked from DWH setup screen
+--create and store outbound message. starts dbms job. invoked from Manage Extracts page
 procedure start_adhoc_extract(
     p_extract_id    IN  dwh_extract_setup.id%type,
     p_param_json    IN  clob,
     p_msg_id        OUT dbo_msg_outbound.msg_id%type
 ) IS
 
-l_name             dwh_extract_setup.name%type;
-l_autom_static_id  dwh_extract_setup.automation_static_id%type;
-l_filters          apex_exec.t_filters;
-l_context          apex_exec.t_context;
+l_name               dwh_extract_setup.name%type;
+l_scheduler_job_name dwh_extract_setup.scheduler_job_name%type;
 
 begin
     g_proc := 'start_adhoc_extract';
 
     p_msg_id := sys_guid();
 
-    select 'MANUAL '||name, automation_static_id
-    into l_name, l_autom_static_id
+    select 'MANUAL '||name, scheduler_job_name
+    into l_name, l_scheduler_job_name
     from dwh_extract_setup
     where id = p_extract_id;
 
@@ -158,36 +132,25 @@ begin
 
     g_step := 'Execute automation';
     if p_msg_id is not null then
-        BEGIN
-
-/*
-            apex_exec.add_filter(
-                p_filters        => l_filters,
-                p_column_name    => 'MSG_ID',
-                p_filter_type    => apex_exec.c_filter_eq,
-                p_value          => p_msg_id );
-
-            apex_automation.execute(
-                p_static_id       => 'dwh-ad-hoc-extracts',
-                p_filters         => l_filters );
-*/
-            apex_automation.execute(
-                p_static_id         => 'dwh-ad-hoc-extracts',
-                p_run_in_background => true
-            );
-                        
-        
+        BEGIN         
+            
+            DBMS_SCHEDULER.RUN_JOB(
+                JOB_NAME            => l_scheduler_job_name,
+                USE_CURRENT_SESSION => FALSE);
+            
         EXCEPTION
             WHEN OTHERS THEN
                 log_error(p_msg_id, 'Unexpected error: ' || SQLERRM);
                 dbo_msg_pkg.update_outbound_status(p_msg_id,'ERROR');
                 raise;
         END;
+
+        debug(p_msg_id, 'Started scheduler job: '|| l_scheduler_job_name);
     end if;
 
 end start_adhoc_extract;
 
---run extract invoked from DWH setup screen
+--run extract
 procedure run_extract(
     p_msg_id        IN dbo_msg_outbound.msg_id%type,
     p_extract_id    IN dwh_extract_setup.id%type,
@@ -350,11 +313,14 @@ BEGIN
 
     END LOOP;
 
+    debug(p_msg_id, 'Running BI Report completed.');
+
     l_blob := l_temp_blob;
     DBMS_LOB.FREETEMPORARY(l_temp_blob);
 
     IF l_result = 'Success' THEN
 
+        g_step := 'Compress file.';
         if nvl(l_compress_flag,'N') = 'Y' then
             g_step := 'Zip file';
             apex_zip.add_file (
@@ -365,6 +331,8 @@ BEGIN
             apex_zip.finish(p_zipped_blob => l_zip_file );
 
             l_file_ext := '.zip';
+            debug(p_msg_id, 'File:'||l_file_name||l_file_ext);
+
         end if;
         
         g_step := 'Upload file to bucket';
@@ -372,12 +340,14 @@ BEGIN
                 credential_name => l_credentials,
                 object_uri => l_obj_storage_url||l_obj_path||'/'||l_file_name||l_file_ext,
                 contents => l_zip_file); 
-           
+        
+        debug(p_msg_id, 'File in bucket:'||l_obj_path||'/'||l_file_name||l_file_ext);
     ELSE
         RAISE e_rest_failed; 
     END IF;
 
     p_result := l_result;
+    p_error_message := 'Extract completed successfully';
 
 EXCEPTION
     WHEN e_file_name THEN
@@ -431,7 +401,10 @@ BEGIN
     WHEN p_extract_name = 'DWH_FA_SUBLEDGER' and upper(p_parameter_name) = 'P_POSTED_DATE' THEN
         --parameter p_posted_date must be fixed count of days defined in parameter p_calc_attr1
         l_parameter_value := TO_CHAR(sysdate - to_number(p_calc_attr1),  'YYYY-MM-DD') || 'T00:00:00';
-   
+
+    WHEN p_extract_name = 'DWH_TAX_SUBLEDGER' and upper(p_parameter_name) = 'P_POSTED_DATE' THEN
+        --parameter p_posted_date must be fixed count of days defined in parameter p_calc_attr1
+        l_parameter_value := TO_CHAR(sysdate - to_number(p_calc_attr1),  'YYYY-MM-DD') || 'T00:00:00';
     ELSE
         l_parameter_value := null;
     END CASE;
@@ -441,50 +414,69 @@ BEGIN
 END calculate_parameter_value;
 
 
-
---This procedure is called from Apex Automation
+--This procedure is called from DBMS_SCHEDULER JOB
 PROCEDURE execute_extract_process(
     p_extract_name IN VARCHAR2
 ) IS
     
-    l_extract_id number;
-    l_msg_id     raw(16);
-    l_running_msg_id     raw(16);
-    l_param_value varchar2(150);
-    l_bi_params  clob;
-    l_payload    clob;
-    l_result     varchar2(30);
-    l_err_msg    varchar(32767);
-    l_count      number;
-    t_parameters dwh_extract_parameter_tab := dwh_extract_parameter_tab();
-    l_step       varchar2(100);
+    l_extract_id      number;
+    l_msg_id          raw(16);
+    l_running_msg_id  raw(16);
+    l_adhoc_msg_id    raw(16);
+    l_param_value     varchar2(150);
+    l_bi_params       clob;
+    l_adhoc_bi_params clob;
+    l_payload         clob;
+    l_result          varchar2(30);
+    l_err_msg         varchar(32767);
+    l_count           number;
+    t_parameters      dwh_extract_parameter_tab := dwh_extract_parameter_tab();
 
     e_is_running exception;
     e_extract_not_found exception;
 BEGIN
-
-    apex_automation.log_info( p_message => 'Extract Name: '||p_extract_name);
-    
-    l_step := 'Query extract details';
+    g_proc := 'execute_extract_process';
+    g_step := 'Query for outbound message if ad-hoc run';
     begin
-        select id, bi_parameters
-        into l_extract_id, l_bi_params
-        from dwh_extract_setup
-        where name = p_extract_name
-        and enabled = 'Y';
+        select msg_id, msg_payload
+        into l_adhoc_msg_id, l_adhoc_bi_params
+        from dbo_msg_outbound
+        where msg_type = 'DWH'
+        and msg_source_ref = 'MANUAL '||p_extract_name
+        and msg_status = 'RECEIVED'
+        order by creation_date desc
+        fetch first 1 row only;
+
+        debug(l_adhoc_msg_id, 'Ad-hoc message found.');
     exception 
-        when no_data_found then
-            raise e_extract_not_found;
+        when no_data_found then 
+            null; --assume regular/scheduled run
     end;
 
-    apex_automation.log_info( p_message => 'Extract ID:'|| l_extract_id );
+    if l_bi_params is null then
+        g_step := 'Query extract details';
+        begin
+            select id, bi_parameters
+            into l_extract_id, l_bi_params
+            from dwh_extract_setup
+            where name = p_extract_name
+            and enabled = 'Y';
+        exception 
+            when no_data_found then
+                raise e_extract_not_found;
+        end;
+    end if;
+
+    if l_adhoc_bi_params is not null then 
+        l_bi_params := l_adhoc_bi_params;
+    end if;
 
     if l_bi_params is not null then
         
         apex_automation.log_info( p_message => 'Default Parameters: ' ||l_bi_params);
         l_count :=0;
         
-        l_step := 'Parse parameters json';
+        g_step := 'Parse parameters json';
         FOR rec IN (SELECT jt.position, jt.name, jt.value, jt.calculate_flag, jt.calc_attr1, jt.calc_attr2, jt.calc_attr3
                     FROM dual,
                      JSON_TABLE(
@@ -516,13 +508,13 @@ BEGIN
             t_parameters.EXTEND;
             t_parameters(l_count) := dwh_extract_parameter_typ(rec.position, rec.name, l_param_value);
         END LOOP;
-        
-        apex_automation.log_info( p_message => 'Parameters: ' ||l_payload);
+
     else
         l_payload := 'Extract '|| p_extract_name || ' has no parameters.';
     end if;
 
-     begin 
+    g_step := 'Check if job already running';
+    begin 
         select msg_id
         into l_running_msg_id
         from dbo_msg_outbound
@@ -536,29 +528,31 @@ BEGIN
             null;
     end;
 
-    l_step := 'Create outbound message';
-    l_msg_id := sys_guid();
-    dbo_msg_pkg.store_outbound_msg(
-        p_msg_id   => l_msg_id,
-        p_payload   => l_payload,
-        p_msg_type  => 'DWH',
-        p_source_ref => p_extract_name
-    );
-
-    apex_automation.log_info( p_message => 'Outbound MSG_ID: ' ||l_msg_id);
+    if l_adhoc_msg_id is not null then
+        l_msg_id := l_adhoc_msg_id;
+    else
+        --regular schedule run, create outbound message.
+        g_step := 'Create outbound message';
+        l_msg_id := sys_guid();
+        dbo_msg_pkg.store_outbound_msg(
+            p_msg_id   => l_msg_id,
+            p_payload   => l_payload,
+            p_msg_type  => 'DWH',
+            p_source_ref => p_extract_name
+        );
+    end if;
 
     if l_running_msg_id is not null then
         raise e_is_running;
     end if; 
 
-    l_step := 'Update status to processing';
+    g_step := 'Update status to processing';
     dbo_msg_pkg.update_outbound_status(
         p_msg_id => l_msg_id,
         p_msg_status => 'PROCESSING');
 
-    apex_automation.log_info( p_message => 'Processing ... ');
-
-    l_step := 'Run extract';
+    g_step := 'Run extract';
+    debug(l_msg_id, 'Start BI Report.');
     dwh_extract_pkg.run_extract(
         p_msg_id        => l_msg_id,
         p_extract_id    => l_extract_id,
@@ -566,7 +560,7 @@ BEGIN
         p_result        => l_result, 
         p_error_message => l_err_msg);
 
-    apex_automation.log_info( p_message => 'Status: ' ||l_result || '; Message: '||l_err_msg);
+    debug(l_msg_id, p_message => 'Outcome status: ' ||l_result || '; Message: '||l_err_msg);
 
     if l_result = 'Success' then 
 
@@ -577,8 +571,6 @@ BEGIN
         dbo_msg_pkg.update_outbound_status(
             p_msg_id => l_msg_id,
             p_msg_status => 'ERROR');
-
-        APEX_AUTOMATION.LOG_ERROR (p_message =>  l_err_msg);
         
     end if;
 
@@ -597,7 +589,6 @@ exception
                 p_msg_status => 'ERROR');
 
         dbo_msg_pkg.log_error(l_msg_id, 'Extract '||p_extract_name||' is not found. Check if its enabled.', 'ERROR');
-        APEX_AUTOMATION.LOG_ERROR (p_message => 'Extract '||p_extract_name||' is not found. Check if its enabled.');
         
     when e_is_running then
 
@@ -606,7 +597,6 @@ exception
                 p_msg_status => 'ERROR');
 
         dbo_msg_pkg.log_error(l_msg_id, 'Previous instance (MSG_ID '||l_running_msg_id||') is still running.', 'ERROR');
-        APEX_AUTOMATION.LOG_ERROR (p_message => 'Previous instance (MSG_ID '||l_running_msg_id||') is still running.');
 
     when others then
         
@@ -614,23 +604,9 @@ exception
                 p_msg_id => l_msg_id,
                 p_msg_status => 'ERROR');
 
-        dbo_msg_pkg.log_error(l_msg_id, substr(l_step||'>> Unexpected Error: '|| SQLERRM,1,4000), 'ERROR');
-        APEX_AUTOMATION.LOG_ERROR (p_message => l_step||'>> Unexpected Error: '|| SQLERRM);
-
+        dbo_msg_pkg.log_error(l_msg_id, substr(g_step||'>> Unexpected Error: '|| SQLERRM,1,4000), 'ERROR');
         
 END execute_extract_process;
-
-function is_running (
-    p_application_id IN number, 
-    p_static_id IN varchar2
-) return varchar2 is
-begin
-    if apex_automation.is_running(p_application_id => p_application_id, p_static_id => p_static_id) then
-        return 'Y';
-    else 
-        return 'N';
-    end if;
-end;
 
 end "DWH_EXTRACT_PKG";
 /

@@ -25,14 +25,14 @@ function get_extract_id (
 ) return number;
 */
 
---create and store outbound message. start apex automation
+--create and store outbound message. start DBMS_SCHEDULER JOB. invoked from Manage Extracts screen
 procedure start_adhoc_extract(
     p_extract_id    IN  dwh_extract_setup.id%type,
     p_param_json    IN  clob,
     p_msg_id        OUT dbo_msg_outbound.msg_id%type
 );
 
---run extract invoked from DWH setup screen
+--run extract
 procedure run_extract(
     p_msg_id        IN dbo_msg_outbound.msg_id%type,
     p_extract_id    IN dwh_extract_setup.id%type,
@@ -51,15 +51,16 @@ FUNCTION calculate_parameter_value(
 ) return varchar2;
 
 
---This procedure is called from Apex Automation
+--This procedure is called from DBMS_SCHEDULER JOBS
 PROCEDURE execute_extract_process(
     p_extract_name IN VARCHAR2
 );
 
+/*
 function is_running (
     p_application_id IN number, 
     p_static_id IN varchar2
 ) return varchar2;
-
+*/
 end "DWH_EXTRACT_PKG";
 /
