@@ -320,9 +320,9 @@ BEGIN
 
     IF l_result = 'Success' THEN
 
-        g_step := 'Compress file.';
+        
         if nvl(l_compress_flag,'N') = 'Y' then
-            g_step := 'Zip file';
+            g_step := 'Compress file.';
             apex_zip.add_file (
                 p_zipped_blob => l_zip_file,
                 p_file_name   => l_file_name||l_file_ext,
@@ -333,15 +333,24 @@ BEGIN
             l_file_ext := '.zip';
             debug(p_msg_id, 'File:'||l_file_name||l_file_ext);
 
+            g_step := 'Upload zip file to bucket';
+            DBMS_CLOUD.PUT_OBJECT(
+                    credential_name => l_credentials,
+                    object_uri => l_obj_storage_url||l_obj_path||'/'||l_file_name||l_file_ext,
+                    contents => l_zip_file);
+            debug(p_msg_id, 'File in bucket:'||l_obj_path||'/'||l_file_name||l_file_ext||'('||round(DBMS_LOB.getlength(l_zip_file)/1024,6)||'KB)');
+        else
+
+            g_step := 'Upload file to bucket';
+            DBMS_CLOUD.PUT_OBJECT(
+                    credential_name => l_credentials,
+                    object_uri => l_obj_storage_url||l_obj_path||'/'||l_file_name||l_file_ext,
+                    contents => l_blob);
+            debug(p_msg_id, 'File in bucket:'||l_obj_path||'/'||l_file_name||l_file_ext||'('||round(DBMS_LOB.getlength(l_blob)/1024,6)||'KB)');
         end if;
         
-        g_step := 'Upload file to bucket';
-        DBMS_CLOUD.PUT_OBJECT(
-                credential_name => l_credentials,
-                object_uri => l_obj_storage_url||l_obj_path||'/'||l_file_name||l_file_ext,
-                contents => l_zip_file); 
         
-        debug(p_msg_id, 'File in bucket:'||l_obj_path||'/'||l_file_name||l_file_ext);
+
     ELSE
         RAISE e_rest_failed; 
     END IF;
