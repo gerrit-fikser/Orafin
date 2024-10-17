@@ -1,0 +1,73 @@
+DECLARE
+   v_table_exists NUMBER;
+BEGIN
+   SELECT COUNT(*)
+   INTO v_table_exists
+   FROM all_tables
+   WHERE table_name = 'DBO_CALLBACK_MSG'
+   AND owner = 'XX_INTEGRATION_DEV';
+
+   IF v_table_exists = 0 THEN
+      EXECUTE IMMEDIATE 'CREATE TABLE XX_INTEGRATION_DEV.DBO_CALLBACK_MSG 
+                           (CALLBACK_ID RAW(16), 
+                            MESSAGE_DATA CLOB, 
+                            JSON_CONTENT CLOB, 
+                            MODULE VARCHAR2(15),
+                            CUSTOM_TOKEN VARCHAR2(30),
+                            CREATED_BY VARCHAR2(100), 
+                            CREATED_DATE DATE, 
+                            CHANGED_BY VARCHAR2(100), 
+                            CHANGED_DATE DATE, 
+                            MSG_ID RAW(16),
+                            CONSTRAINT DBO_CALLBACK_MSG_PK PRIMARY KEY (CALLBACK_ID) USING INDEX ENABLE,
+                            CONSTRAINT DBO_CALLBACK_MSG_FK_DBO_MSG_INBOUND FOREIGN KEY (MSG_ID) REFERENCES XX_INTEGRATION_DEV.DBO_MSG_INBOUND (MSG_ID) ON DELETE CASCADE ENABLE
+                           )';
+      EXECUTE IMMEDIATE 'CREATE UNIQUE INDEX XX_INTEGRATION_DEV.DBO_CALLBACK_MSG_PK ON XX_INTEGRATION_DEV.DBO_CALLBACK_MSG(CALLBACK_ID)';
+   END IF;
+END;
+/
+
+COMMENT ON COLUMN "XX_INTEGRATION_DEV"."DBO_CALLBACK_MSG"."CALLBACK_ID" IS 'Id for the callback from ERP';
+COMMENT ON COLUMN "XX_INTEGRATION_DEV"."DBO_CALLBACK_MSG"."MESSAGE_DATA" IS 'The full callback message';
+COMMENT ON COLUMN "XX_INTEGRATION_DEV"."DBO_CALLBACK_MSG"."JSON_CONTENT" IS 'The Json Payload extracted.';
+COMMENT ON COLUMN "XX_INTEGRATION_DEV"."DBO_CALLBACK_MSG"."CREATED_BY" IS 'Created by';
+COMMENT ON COLUMN "XX_INTEGRATION_DEV"."DBO_CALLBACK_MSG"."CREATED_DATE" IS 'Created Date';
+COMMENT ON COLUMN "XX_INTEGRATION_DEV"."DBO_CALLBACK_MSG"."CHANGED_BY" IS 'Changed by';
+COMMENT ON COLUMN "XX_INTEGRATION_DEV"."DBO_CALLBACK_MSG"."CHANGED_DATE" IS 'Changed Date';
+COMMENT ON COLUMN "XX_INTEGRATION_DEV"."DBO_CALLBACK_MSG"."MSG_ID" IS 'FK to the inbound message.';
+
+DECLARE
+   v_column_exists NUMBER;
+BEGIN
+   SELECT COUNT(*)
+   INTO v_column_exists
+   FROM all_tab_cols
+   WHERE table_name = 'DBO_CALLBACK_MSG'
+   AND owner = 'XX_INTEGRATION_DEV'
+   AND column_name = 'MODULE';
+
+   IF v_column_exists = 0 THEN
+      EXECUTE IMMEDIATE 'ALTER TABLE XX_INTEGRATION_DEV.DBO_CALLBACK_MSG ADD MODULE VARCHAR2(15)';
+   END IF;
+END;
+/
+
+COMMENT ON COLUMN "XX_INTEGRATION_DEV"."DBO_CALLBACK_MSG"."MODULE" IS 'Module which sent the initial message to ERP';
+
+DECLARE
+   v_column_exists NUMBER;
+BEGIN
+   SELECT COUNT(*)
+   INTO v_column_exists
+   FROM all_tab_cols
+   WHERE table_name = 'DBO_CALLBACK_MSG'
+   AND owner = 'XX_INTEGRATION_DEV'
+   AND column_name = 'CUSTOM_TOKEN';
+
+   IF v_column_exists = 0 THEN
+      EXECUTE IMMEDIATE 'ALTER TABLE XX_INTEGRATION_DEV.DBO_CALLBACK_MSG ADD CUSTOM_TOKEN VARCHAR2(30)';
+   END IF;
+END;
+/
+
+COMMENT ON COLUMN "XX_INTEGRATION_DEV"."DBO_CALLBACK_MSG"."CUSTOM_TOKEN" IS 'Custom attribute that was sent as part of the callback URL';
