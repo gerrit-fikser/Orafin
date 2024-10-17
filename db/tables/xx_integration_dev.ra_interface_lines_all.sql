@@ -10,7 +10,7 @@ BEGIN
    IF v_table_exists = 0 THEN
       EXECUTE IMMEDIATE 'CREATE TABLE XX_INTEGRATION_DEV.RA_INTERFACE_LINES_ALL(
               X_MSG_ID RAW(32),
-              X_APEX_STATUS VARCHAR2(10),
+              X_APEX_STATUS VARCHAR2(30),
               X_APEX_MESSAGE VARCHAR2(4000),
               X_CREATION_DATE date,
               X_LAST_UPDATE_DATE date,
